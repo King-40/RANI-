@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050b14">
+<title>Jarvis</title>
+<style>
+  :root { --bg:#050b14; --cyan:#27e1ff; --dim:#1b3a4b; --text:#d8f6ff; --user:#0e2a3a; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; margin:0; background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  body { display:flex; flex-direction:column; max-width:720px; margin:0 auto;
+    padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 0 8px; }
+  h1 { margin:0; font-size:18px; letter-spacing:6px; color:var(--cyan); font-weight:600; }
+  .tools { display:flex; gap:8px; align-items:center; }
+  select, .small { background:transparent; color:var(--text); border:1px solid var(--dim);
+    border-radius:8px; padding:6px 8px; font-size:13px; }
+  #log { flex:1; overflow-y:auto; padding:8px 0; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:85%; padding:10px 14px; border-radius:16px; line-height:1.4; font-size:15px;
+    white-space:pre-wrap; word-wrap:break-word; }
+  .jarvis { align-self:flex-start; border:1px solid var(--dim); background:rgba(39,225,255,.05); }
+  .you { align-self:flex-end; background:var(--user); }
+  .sys { align-self:center; color:#7aa; font-size:13px; }
+  #orbWrap { display:flex; flex-direction:column; align-items:center; padding:10px 0 6px; }
+  #orb { width:84px; height:84px; border-radius:50%; border:2px solid var(--cyan);
+    background:radial-gradient(circle,rgba(39,225,255,.35),rgba(39,225,255,.05) 70%);
+    box-shadow:0 0 22px rgba(39,225,255,.4); color:var(--cyan); font-size:30px; cursor:pointer;
+    transition:transform .2s; }
+  #orb.listening { animation:pulse 1.1s infinite; background:radial-gradient(circle,rgba(39,225,255,.7),rgba(39,225,255,.1) 70%); }
+  #orb.thinking { animation:spin 1.4s linear infinite; border-style:dashed; }
+  #orb.speaking { animation:pulse .6s infinite; box-shadow:0 0 34px rgba(255,190,60,.7); border-color:#ffbe3c; color:#ffbe3c; }
+  @keyframes pulse { 50% { transform:scale(1.1); } }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #status { font-size:12px; color:#7aa; margin-top:8px; height:16px; }
+  form { display:flex; gap:8px; padding:8px 0 12px; }
+  input[type=text] { flex:1; background:transparent; color:var(--text); border:1px solid var(--dim);
+    border-radius:12px; padding:12px; font-size:16px; outline:none; }
+  input[type=text]:focus { border-color:var(--cyan); }
+  button.send { background:var(--cyan); color:#001; border:0; border-radius:12px; padding:0 18px; font-weight:600; }
+  label.auto { font-size:12px; display:flex; align-items:center; gap:4px; color:#9bc; }
+</style>
+</head>
+<body>
+<header>
+  <h1>JARVIS</h1>
+  <div class="tools">
+    <label class="auto"><input type="checkbox" id="auto" checked> Auto</label>
+    <select id="lang">
+      <option value="en-IN">EN / Hinglish</option>
+      <option value="hi-IN">हिन्दी</option>
+      <option value="en-US">English (US)</option>
+    </select>
+    <button class="small" id="clear" type="button">Reset</button>
+  </div>
+</header>
+
+<div id="log"></div>
+
+<div id="orbWrap">
+  <button id="orb" type="button" aria-label="Talk to Jarvis">🎙</button>
+  <div id="status">Tap the orb and speak</div>
+</div>
+
+<form id="form">
+  <input type="text" id="text" placeholder="Ya yahan type karo..." autocomplete="off">
+  <button class="send" type="submit">Send</button>
+</form>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $('log'), orb = $('orb'), statusEl = $('status');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+let history = [];
+try { history = JSON.parse(localStorage.getItem('jarvis_history') || '[]'); } catch (e) {}
+let listening = false, busy = false;
+
+function save() {
+  history = history.slice(-40);
+  try { localStorage.setItem('jarvis_history', JSON.stringify(history)); } catch (e) {}
+}
+function addMsg(cls, text) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+function setState(state, label) {
+  orb.className = state || '';
+  statusEl.textContent = label || '';
+}
+
+// Restore recent conversation
+history.slice(-6).forEach(m => addMsg(m.role === 'user' ? 'you' : 'jarvis', m.content));
+if (!history.length) addMsg('jarvis', 'Namaste sir, Jarvis online hai. Kaise ho aap?');
+
+// ---------- Speech output ----------
+function pickVoice(lang) {
+  const voices = speechSynthesis.getVoices();
+  const base = lang.split('-')[0];
+  return voices.find(v => v.lang === lang) ||
+         voices.find(v => v.lang.replace('_', '-').startsWith(base)) || null;
+}
+function speak(text) {
+  if (!('speechSynthesis' in window)) { setState('', ''); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = $('lang').value;
+  const v = pickVoice(u.lang);
+  if (v) u.voice = v;
+  u.rate = 1.0;
+  u.onstart = () => setState('speaking', 'Speaking... (tap orb to stop)');
+  u.onend = u.onerror = () => {
+    setState('', 'Tap the orb and speak');
+    if ($('auto').checked && SR) startListening();
+  };
+  speechSynthesis.speak(u);
+}
+
+// ---------- Speech input ----------
+let rec = null;
+if (SR) {
+  rec = new SR();
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  rec.onstart = () => { listening = true; setState('listening', 'Listening...'); };
+  rec.onend = () => { listening = false; if (!busy && !speechSynthesis.speaking) setState('', 'Tap the orb and speak'); };
+  rec.onerror = e => { listening = false; setState('', e.error === 'not-allowed' ? 'Mic permission do' : 'Tap the orb and speak'); };
+  rec.onresult = e => { const t = e.results[0][0].transcript.trim(); if (t) send(t); };
+} else {
+  statusEl.textContent = 'Voice input ke liye Chrome/Safari use karo. Typing kaam karegi.';
+}
+function startListening() {
+  if (!rec || listening || busy) return;
+  rec.lang = $('lang').value;
+  try { rec.start(); } catch (e) {}
+}
+
+orb.onclick = () => {
+  if (speechSynthesis.speaking) { speechSynthesis.cancel(); setState('', 'Tap the orb and speak'); return; }
+  if (listening) { rec.stop(); return; }
+  startListening();
+};
+
+// ---------- Chat ----------
+async function send(text) {
+  if (busy) return;
+  busy = true;
+  addMsg('you', text);
+  history.push({ role: 'user', content: text });
+  setState('thinking', 'Soch raha hoon...');
+  try {
+    const pw = localStorage.getItem('jarvis_pw') || '';
+    let res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Password': pw },
+      body: JSON.stringify({ messages: history })
+    });
+    if (res.status === 401) {
+      const entered = prompt('Password daalo:');
+      if (entered) {
+        localStorage.setItem('jarvis_pw', entered);
+        res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Password': entered },
+          body: JSON.stringify({ messages: history })
+        });
+      }
+    }
+    if (!res.ok) throw new Error('bad response');
+    const data = await res.json();
+    addMsg('jarvis', data.reply);
+    history.push({ role: 'assistant', content: data.reply });
+    save();
+    busy = false;
+    speak(data.reply);
+  } catch (err) {
+    history.pop();
+    busy = false;
+    addMsg('sys', 'Kuch gadbad ho gayi. Dobara try karo.');
+    setState('', 'Tap the orb and speak');
+  }
+}
+
+$('form').onsubmit = e => {
+  e.preventDefault();
+  const t = $('text').value.trim();
+  if (t) { $('text').value = ''; send(t); }
+};
+$('clear').onclick = () => {
+  if (!confirm('Saari baatein bhool jaun?')) return;
+  history = []; save(); log.innerHTML = '';
+  addMsg('sys', 'Memory clear ho gayi.');
+};
+speechSynthesis.onvoiceschanged = () => {};
+</script>
+</body>
+</html>
